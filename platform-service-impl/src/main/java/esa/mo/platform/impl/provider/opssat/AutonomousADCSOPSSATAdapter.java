@@ -53,6 +53,9 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
   private static final float ANGLE_TOL_PERCENT = 20.0f;
   private static final float ANGLE_VEL_TOL_RADPS = 0.00872665f;
   private static final float TARGET_THRESHOLD_RAD = 0.261799f;
+  private static final float VECTOR_TOL_EPSILON = 1.0E-5f;
+  private static final float QUATERNION_TOL_EPSILON = 1.0E-5f;
+
 
   private static final float MAX_REACTION_WHEEL_SPEED = 1047.197551f;
   private static final float MAX_REACTION_WHEEL_TORQUE = 0.0001f;
@@ -66,6 +69,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
   private SEPP_IADCS_API_VECTOR3_XYZ_FLOAT flightVector;
   private SEPP_IADCS_API_VECTOR3_XYZ_FLOAT targetVector; // For sun pointing
   private SEPP_IADCS_API_TARGET_POINTING_TOLERANCE_PARAMETERS tolerance;
+  private SEPP_IADCS_API_QUATERNION_FLOAT quaternion;   // For inertial pointing
 
   private PositionHolder holder;
 
@@ -116,7 +120,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
     private boolean isX = true;
     private boolean isY = false;
     private boolean isZ = false;
-    private boolean isFinshed;
+    private boolean isFinished;
 
     public PositionHolder(Vector3D targetVec, float margin)
     {
@@ -132,7 +136,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
     public void stop()
     {
       isHoldingPosition = false;
-      while (!isFinshed) {
+      while (!isFinished) {
         try {
           wait(1);
         } catch (InterruptedException ex) {
@@ -248,7 +252,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
       adcsApi.Stop_SingleAxis_AngularVelocity_Controller(
           SEPP_IADCS_API_SINGLEAXIS_CONTROL_TARGET_AXIS.IADCS_SINGLEAXIS_CONTROL_TARGET_Z);
 
-      isFinshed = true;
+      isFinished = true;
     }
   }
 
@@ -286,13 +290,18 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
    */
   public void setLOSVector(VectorF3D los) throws IllegalArgumentException
   {
-    double x2 = (double) los.getX() * (double) los.getX();
-    double y2 = (double) los.getY() * (double) los.getY();
-    double z2 = (double) los.getZ() * (double) los.getZ();
     if (!isUnity(los)) {
-      throw new IllegalArgumentException("The provided line of sight vector needs to have length 1.");
+      throw new IllegalArgumentException("The provided line of sight vector shall have quadratic norm equal to 1.");
     }
     losVector = convertToAdcsApiVector(los);
+  }
+  
+  public void setQuaternion(Quaternion quat)
+  {
+    if (!isUnityQuat(quat)) {
+      throw new IllegalArgumentException("The provided quaternion shall have quadratic norm equal to 1.");
+    }
+      quaternion = convertToAdcsApiQuaternion(quat);
   }
 
   /**
@@ -324,17 +333,34 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
   }
 
   /**
-   * Checks if a given VectorF3D has the euclidian length 1 (is a unit vector).
+   * Checks if a given VectorF3D has the euclidian length 1 (is a unit vector)
+   * given the tolerance @param VECTOR_TOLL_EPSILON.
    *
    * @param vec The vector to be checked.
-   * @return True iff length is 1.
+   * @return True if length is 1.
    */
   private boolean isUnity(VectorF3D vec)
   {
-    double x2 = (double) vec.getX() * (double) vec.getX();
-    double y2 = (double) vec.getY() * (double) vec.getY();
-    double z2 = (double) vec.getZ() * (double) vec.getZ();
-    return Math.sqrt(x2 + y2 + z2) == 1.0;
+    float x2 = (float) vec.getX() * (float) vec.getX();
+    float y2 = (float) vec.getY() * (float) vec.getY();
+    float z2 = (float) vec.getZ() * (float) vec.getZ();
+    return Math.abs(Math.sqrt(x2 + y2 + z2) - 1.0) <= VECTOR_TOL_EPSILON;
+  }
+  
+  /**
+   * Checks if a given Quaternion has the euclidian length 1 (is a unit vector)
+   * given the tolerance @param QUATERNION_TOLL_EPSILON
+   *
+   * @param quat The vector to be checked.
+   * @return True if length is 1.
+   */  
+  private boolean isUnityQuat(Quaternion quat)
+  {
+    float Q1_POW = (float) quat.getA() * (float) quat.getA();
+    float Q2_POW = (float) quat.getB() * (float) quat.getB();
+    float Q3_POW = (float) quat.getC() * (float) quat.getC();
+    float Q4_POW = (float) quat.getD() * (float) quat.getD();
+    return Math.abs(Math.sqrt(Q1_POW + Q2_POW + Q3_POW + Q4_POW) - 1.0) <= QUATERNION_TOL_EPSILON;
   }
 
   private void dumpHKTelemetry()
@@ -417,6 +443,16 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
     return new Quaternion(in.getQ(), in.getQ_I(), in.getQ_J(), in.getQ_K());
   }
 
+  static private SEPP_IADCS_API_QUATERNION_FLOAT convertToAdcsApiQuaternion(Quaternion in)
+  {
+      SEPP_IADCS_API_QUATERNION_FLOAT quat = new SEPP_IADCS_API_QUATERNION_FLOAT();
+      quat.setQ(in.getA());
+      quat.setQ_I(in.getB());
+      quat.setQ_J(in.getC());
+      quat.setQ_K(in.getD());
+      return quat;
+  }
+  
   static private MagnetorquersState convertAdcsApiMtqState(long in)
   {
     int mappedOrdinal;
@@ -433,6 +469,29 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
         break;
     }
     return MagnetorquersState.fromOrdinal(mappedOrdinal);
+  }
+  
+  static private SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES convertToAdcsApiDeterminationMode(AttitudeDeterminationMode determinationMode)
+  {
+    SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES detMode;
+    switch (determinationMode.getOrdinal()) {
+      case 1:
+        detMode = SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_USING_MAGNETIC_AND_SUN_DURING_PREALIGNMENT;
+        break;
+      case 2:
+        detMode = SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_USING_STARTRACKER_WITH_MAGNETIC_AND_SUN;
+        break;
+      case 3:
+        detMode = SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_STARTRACKER_ONLY;
+        break;
+      case 4:
+        detMode = SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_INVALID;
+        break;
+      default:
+        detMode = SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_INVALID;
+        break;
+    }
+    return detMode;
   }
 
   static private SEPP_IADCS_API_VECTOR3_XYZ_FLOAT convertToAdcsApiVector(VectorF3D vec)
@@ -467,9 +526,9 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
     list.add((float) in2.getW());
     return new WheelsSpeed(list);
   }
-
+  
   @Override
-  public void setDesiredAttitude(AttitudeMode attitude) throws IOException,
+  public void setDesiredAttitude(AttitudeMode attitude, AttitudeDeterminationMode attitudeDeterminationMode) throws IOException,
       UnsupportedOperationException
   {
     if (attitude instanceof AttitudeModeBDot) {
@@ -481,10 +540,31 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
       params.setSTOP_EPOCH_TIME_MSEC(BigInteger.valueOf(Long.MAX_VALUE));
       adcsApi.Start_Operation_Mode_Detumbling(params);
       activeAttitudeMode = a;
+    } else if (attitude instanceof AttitudeModeInertialPointing) {
+      if (losVector == null || flightVector == null || quaternion == null) {
+        throw new IOException(
+            "LOS vector, quaternion or flight vector not set. Call setLOSVector, setQuaternion and setFlightVector before calling setDesiredAttitudeMode.");
+      }
+      AttitudeModeInertialPointing a = (AttitudeModeInertialPointing) attitude;
+      SEPP_IADCS_API_TARGET_POINTING_INERTIAL_MODE_PARAMETERS params =
+              new SEPP_IADCS_API_TARGET_POINTING_INERTIAL_MODE_PARAMETERS();
+      // Set parameters
+      params.setLOS_VECTOR_BF(losVector);
+      params.setBASE_QUATERNION(quaternion);
+      params.setFLIGHT_VECTOR_BF(losVector);
+      params.setDETERMINATION_MODE(convertToAdcsApiDeterminationMode(attitudeDeterminationMode));
+      params.setOFFSET_TIME_MSEC(BigInteger.valueOf(0));
+      params.setSTART_EPOCH_TIME_MSEC(BigInteger.valueOf(0));
+      params.setSTOP_EPOCH_TIME_MSEC(BigInteger.valueOf(Long.MAX_VALUE));
+      params.setUPDATE_INTERVAL_MSEC(BigInteger.valueOf(500));
+      adcsApi.Start_Target_Pointing_Inertial_Mode(params);
+      adcsApi.Stop_Target_Pointing_Inertial_Mode();
+      
+      activeAttitudeMode = a;
     } else if (attitude instanceof AttitudeModeNadirPointing) {
       if (losVector == null || flightVector == null) {
         throw new IOException(
-            "LOS vector or flight vector not set. Call setLOSVector and setFlightVector before calling setDesiredAttitudeMode.");
+            "LOS vector or flight vector not set. Call setLOSVector, setBaseQuaternion and setFlightVector before calling setDesiredAttitudeMode.");
       }
       AttitudeModeNadirPointing a = (AttitudeModeNadirPointing) attitude;
       SEPP_IADCS_API_TARGET_POINTING_NADIR_MODE_PARAMETERS params =
@@ -493,8 +573,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
       params.setLOS_VECTOR_BF(losVector);
       params.setFLIGHT_VECTOR_BF(flightVector);
       params.setUPDATE_INTERVAL_MSEC(BigInteger.valueOf(500));
-      params.setDETERMINATION_MODE(
-          SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_STARTRACKER_ONLY);
+      params.setDETERMINATION_MODE(convertToAdcsApiDeterminationMode(attitudeDeterminationMode));
 
       params.setTOLERANCE_PARAMETERS(tolerance);
       params.setOFFSET_TIME_MSEC(BigInteger.valueOf(0));
@@ -540,8 +619,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
       SEPP_IADCS_API_TARGET_POINTING_FIXED_MODE_PARAMETERS params =
           new SEPP_IADCS_API_TARGET_POINTING_FIXED_MODE_PARAMETERS();
 
-      params.setDETERMINATION_MODE(
-          SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_STARTRACKER_ONLY);
+      params.setDETERMINATION_MODE(convertToAdcsApiDeterminationMode(attitudeDeterminationMode));
       params.setTOLERANCE_PARAMETERS(tolerance);
       params.setFLIGHT_VECTOR_BF(flightVector);
       params.setLOS_VECTOR_BF(losVector);
@@ -562,8 +640,7 @@ public class AutonomousADCSOPSSATAdapter implements AutonomousADCSAdapterInterfa
           new SEPP_IADCS_API_TARGET_POINTING_CONST_VELOCITY_MODE_PARAMETERS();
       params.setFLIGHT_VECTOR_BF(flightVector);
       params.setLOS_VECTOR_BF(losVector);
-      params.setDETERMINATION_MODE(
-          SEPP_IADCS_API_TARGET_POINTING_ATTITUDE_DETERMINATION_MODES.IADCS_ATTITUDE_DETERMINATION_STARTRACKER_ONLY);
+      params.setDETERMINATION_MODE(convertToAdcsApiDeterminationMode(attitudeDeterminationMode));
       params.setOFFSET_TIME_MSEC(BigInteger.valueOf(0));
       AttitudeModeTargetTrackingLinear a = (AttitudeModeTargetTrackingLinear) attitude;
       params.setSTART_EPOCH_TIME_MSEC(BigInteger.valueOf(a.getStartEpoch()));
